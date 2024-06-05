@@ -1,0 +1,22 @@
+#!/bin/bash
+
+$INTERFACE="ens3"
+$VLAN="100"
+
+# Conectar no nat só para instalar esse pacote, para permitir usar o comando ip
+apt update
+apt install iproute2 -y
+
+ip addr flush dev $INTERFACE
+
+ip link add link eth0 name eth0.100 type vlan id 100
+ip addr add 192.168.100.50/24 dev eth0.100
+
+ip link set dev $INTERFACE.$VLAN up
+
+ip route add default via 192.168.100.250 dev eth0.100
+
+echo "nameserver 172.16.4.4" | tee -a /etc/resolv.conf
+echo "nameserver 172.16.4.2" | tee -a /etc/resolv.conf
+echo "nameserver 192.168.122.1" | tee -a /etc/resolv.conf
+echo "nameserver 192.168.100.250" | tee -a /etc/resolv.conf
