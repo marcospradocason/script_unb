@@ -1,0 +1,261 @@
+# Entrar como ROOT
+
+#!/bin/bash
+
+# Instala Suricata e Fail2Ban
+echo "Instalando Suricata e Fail2Ban..."
+apt update
+add-apt-repository ppa:oisf/suricata-stable
+apt update
+apt install -y suricata sudo systemctl iproute2 fail2ban
+
+# Configura Suricata para baixar e instalar as regras do Emerging Threats
+RULES_DIR="/etc/suricata/rules"
+ET_RULES_URL="https://rules.emergingthreats.net/open/suricata/emerging.rules.tar.gz"
+SURICATA_CONF="/etc/suricata/suricata.yaml"
+CUSTOM_RULES_FILE="$RULES_DIR/custom.rules"
+
+echo "Baixando regras do Emerging Threats..."
+wget -O /tmp/emerging.rules.tar.gz $ET_RULES_URL
+echo "Extraindo regras..."
+tar -xzf /tmp/emerging.rules.tar.gz -C $RULES_DIR
+rm /tmp/emerging.rules.tar.gz
+
+# Atualiza e habilita fontes de regras adicionais
+echo "Atualizando fontes de regras do Suricata..."
+suricata-update update-sources
+suricata-update enable-source et/open
+suricata-update enable-source oisf/trafficid
+suricata-update enable-source stamus/lateral
+suricata-update enable-source sslbl/ssl-fp-blacklist
+suricata-update enable-source sslbl/ja3-fingerprints
+suricata-update enable-source etnetera/aggressive
+suricata-update enable-source tgreen/hunting
+suricata-update enable-source malsilo/win-malware
+suricata-update enable-source pawpatrules
+
+echo "Atualizando configuração do Suricata..."
+if ! grep -q "emerging-" $SURICATA_CONF; then
+    echo -e "\n# Regras do Emerging Threats" >> $SURICATA_CONF
+    for rule in $RULES_DIR/emerging-*.rules; do
+        echo " - $rule" >> $SURICATA_CONF
+    done
+fi
+
+echo "Adicionando regras personalizadas..."
+cat <<EOL > $CUSTOM_RULES_FILE
+# Regra para detectar ataques de força bruta (SSH)
+alert tcp any any -> any 22 (msg:"ALERTA: Ataque de força bruta SSH detectado"; flow:to_server,established; content:"SSH"; pcre:"/^SSH-\d\.\d-/"; detection_filter:track by_src, count 5, seconds 60; classtype:attempted-dos; sid:1000001; rev:1;)
+
+# Regra para detectar varredura de portas
+alert tcp any any -> any any (msg:"ALERTA: Varredura de portas detectada"; flags:S; threshold:type both, track by_src, count 20, seconds 60; classtype:attempted-recon; sid:1000002; rev:1;)
+
+# Regra para detectar SQL Injection
+alert http any any -> any any (msg:"ALERTA: Tentativa de SQL Injection detectada"; flow:to_server,established; content:"select"; nocase; http_uri; content:"from"; nocase; http_uri; classtype:web-application-attack; sid:1000003; rev:1;)
+
+# Regra para detectar sequestro de sessão
+alert http any any -> any any (msg:"ALERTA: Sequestro de sessão detectado"; flow:to_server,established; content:"session_id="; http_cookie; classtype:web-application-attack; sid:1000004; rev:1;)
+
+# Regra para detectar ataques Kerberos
+alert tcp any any -> any 88 (msg:"ALERTA: Tentativa de ataque Kerberos detectada"; flow:to_server,established; content:"AS-REQ"; classtype:attempted-user; sid:1000005; rev:1;)
+
+# Regra para detectar ataques NTLM
+alert tcp any any -> any any (msg:"ALERTA: Tentativa de ataque NTLM detectada"; flow:to_server,established; content:"NTLMSSP"; classtype:attempted-user; sid:1000006; rev:1;)
+
+# Regra para detectar ataques Man-in-the-Middle
+alert tcp any any -> any any (msg:"ALERTA: Possível ataque Man-in-the-Middle detectado"; flow:to_server,established; content:"client_hello"; content:"server_hello"; classtype:attempted-recon; sid:1000007; rev:1;)
+
+# Regra para detectar tentativas de exploração de vulnerabilidades conhecidas
+alert http any any -> any any (msg:"ALERTA: Tentativa de exploração de vulnerabilidade conhecida"; flow:to_server,established; content:"exploit"; nocase; http_uri; classtype:web-application-attack; sid:1000008; rev:1;)
+
+# Regra para detectar ataques XSS
+alert http any any -> any any (msg:"ALERTA: Tentativa de XSS detectada"; flow:to_server,established; content:"<script>"; http_uri; classtype:web-application-attack; sid:1000009; rev:1;)
+
+# Regra para detectar injeção de comandos
+alert http any any -> any any (msg:"ALERTA: Tentativa de injeção de comandos detectada"; flow:to_server,established; content:"|"; http_uri; classtype:web-application-attack; sid:1000010; rev:1;)
+
+# Regra para detectar lateralidade de diretórios
+alert http any any -> any any (msg:"ALERTA: Tentativa de lateralidade de diretórios detectada"; flow:to_server,established; content:"../"; http_uri; classtype:web-application-attack; sid:1000011; rev:1;)
+
+# Regra para detectar inclusão de arquivos locais
+alert http any any -> any any (msg:"ALERTA: Tentativa de inclusão de arquivo local detectada"; flow:to_server,established; content:"file="; http_uri; classtype:web-application-attack; sid:1000012; rev:1;)
+
+# Regra para detectar inclusão de arquivos remotos
+alert http any any -> any any (msg:"ALERTA: Tentativa de inclusão de arquivo remoto detectada"; flow:to_server,established; content:"http://"; http_uri; classtype:web-application-attack; sid:1000013; rev:1;)
+
+# Regra para detectar tunelamento via DNS
+alert dns any any -> any any (msg:"ALERTA: Tentativa de DNS Tunneling detectada"; flow:to_server,established; content:"example.com"; dns_query; classtype:attempted-user; sid:1000014; rev:1;)
+
+# Regra para detectar exploração SMB
+alert tcp any any -> any 445 (msg:"ALERTA: Tentativa de exploração SMB detectada"; flow:to_server,established; content:"SMB"; classtype:attempted-user; sid:1000015; rev:1;)
+
+# Regra para detectar exploração RDP
+alert tcp any any -> any 3389 (msg:"ALERTA: Tentativa de exploração RDP detectada"; flow:to_server,established; content:"RDP"; classtype:attempted-user; sid:1000016; rev:1;)
+
+# Regra para detectar ICMP Flood
+alert icmp any any -> any any (msg:"ALERTA: Ataque ICMP Flood detectado"; threshold:type both, track by_src, count 100, seconds 10; classtype:attempted-dos; sid:1000017; rev:1;)
+EOL
+
+# Adiciona a regra personalizada ao arquivo de configuração do Suricata
+if ! grep -q "custom.rules" $SURICATA_CONF; then
+    echo "Adicionando arquivo de regras personalizadas ao Suricata..."
+    echo " - $CUSTOM_RULES_FILE" >> $SURICATA_CONF
+fi
+
+# Configura o Suricata YAML
+echo "Configurando saída de logs no Suricata..."
+cat <<EOL >> $SURICATA_CONF
+%YAML 1.1
+---
+# Global settings
+
+vars:
+  interface-with-vlan: "eth0.100" #Ajustar conforme o ambiente
+  server-wazuh: "192.168.100.22"
+  address-groups:
+    HOME_NET: "[192.168.0.0/16]"
+    EXTERNAL_NET: "!$HOME_NET"
+  port-groups:
+    HTTP_PORTS: "80"
+    SHELLCODE_PORTS: "!80"
+    
+# Suricata interfaces
+af-packet:
+  - interface: \$interface-with-vlan
+    threads: auto
+    cluster-id: 99
+    cluster-type: cluster_flow
+    defrag: yes
+    use-mmap: yes
+
+# Include your rule files
+default-rule-path: /etc/suricata/rules
+rule-files:
+  - /etc/suricata/rules/emerging-threats.rules
+  - /etc/suricata/rules/custom.rules
+  - /etc/suricata/rules/emerging.rules
+
+# Outputs
+outputs:
+  - eve-log:
+      enabled: yes
+      filetype: json
+      filename: /var/log/suricata/eve.json
+  - alert-fast:
+      enabled: yes
+      filename: /var/log/suricata/fast.log
+  - syslog:
+      enabled: yes
+      facility: local1
+      level: info
+      output-type: syslog
+      server: \$server-wazuh
+      port: 514
+      protocol: udp
+
+# Logging
+logging:
+  default-log-level: notice
+  outputs:
+    - console:
+        enabled: yes
+    - file:
+        enabled: yes
+        filename: /var/log/suricata/suricata.log
+
+# HTTP settings
+http:
+  memcap: 64mb
+  libhtp:
+    default-config:
+      personality: IDS
+      request-body-limit: 100kb
+      response-body-limit: 100kb
+      double-decode-path: no
+      double-decode-query: no
+      uri-include-all-headers: yes
+
+# Detection settings
+detect:
+  profile: medium
+  sgh-mpm-context: auto
+  inspection-recursion-limit: 3000
+
+default-rule-action: drop     
+      
+EOL
+
+# Reinicia o Suricata para aplicar as mudanças
+echo "Reiniciando Suricata..."
+systemctl restart suricata
+
+# Configura Fail2Ban
+echo "Configurando Fail2Ban..."
+cat <<EOL > /etc/fail2ban/filter.d/suricata.conf
+[Definition]
+failregex = .*"src_ip":"<HOST>".*"alert".*
+ignoreregex =
+EOL
+
+cat <<EOL > /etc/fail2ban/jail.local
+[DEFAULT]
+bantime  = 3600      # 1 hora de banimento
+findtime  = 600      # 10 minutos para contar as tentativas falhas
+maxretry = 3         # Banir após 3 tentativas falhas
+
+[sshd]
+enabled = true
+port = ssh
+logpath = /var/log/auth.log
+maxretry = 3
+
+[suricata]
+enabled = true   
+filter = suricata
+action = iptables[name=Suricata, port=any, protocol=all]
+logpath = /var/log/suricata/eve.json
+maxretry = 3
+
+[apache-auth]
+enabled = true
+port = http,https
+logpath = /var/log/apache*/*error.log
+maxretry = 3
+
+[nginx-http-auth]
+enabled = true
+port = http,https
+logpath = /var/log/nginx/error.log
+maxretry = 3
+
+[vsftpd]
+enabled = true
+port = ftp,ftp-data,ftps,ftps-data
+logpath = /var/log/vsftpd.log
+maxretry = 3
+
+[samba]
+enabled = true
+port = netbios-ns,netbios-dgm,netbios-ssn,microsoft-ds
+logpath = /var/log/samba/log.smbd
+maxretry = 3
+
+[postfix]
+enabled = true
+port = smtp,ssmtp
+logpath = /var/log/mail.log
+maxretry = 3
+
+[exim]
+enabled = true
+port = smtp,ssmtp
+logpath = /var/log/exim4/mainlog
+maxretry = 3
+
+EOL
+
+# Reinicie o Fail2Ban para aplicar as mudanças
+echo "Reiniciando Fail2Ban..."
+systemctl restart fail2ban
+
+echo "Configuração concluída!"
